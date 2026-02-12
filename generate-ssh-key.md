@@ -58,5 +58,5 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtw1BOb553JRTNxM2lelAZqPY1THQtA16vBIvv2TQcl
 - Never commit it to git or share it
 - The public key (`id_ed25519.pub`) is safe to put anywhere
 
-You'll typicall add the public key to the `.ssh/authorized_keys` file to grant access to that server via ssh without having to specify a key.
+You'll typically add the public key to the `.ssh/authorized_keys` file to grant access to that server via ssh without having to specify a key.
 
