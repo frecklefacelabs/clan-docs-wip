@@ -1,3 +1,7 @@
+# [DEPRECATED] This has been rewritten and moved here:
+
+[https://git.clan.lol/jeffcogswell/clan-core-fork1/src/branch/jeffrey/getting_started/docs/site/getting-started/getting-started-physical.md](https://git.clan.lol/jeffcogswell/clan-core-fork1/src/branch/jeffrey/getting_started/docs/site/getting-started/getting-started-physical.md)
+
 # Getting Started: Physical Machine Target
 
 !!! Note Prerequisites
