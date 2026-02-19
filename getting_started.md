@@ -122,11 +122,11 @@ You will see output similar to this; look under `SIZE` column to find the entry 
 ```{.shellSession hl_lines="2" .no-copy}
 NAME                                          MAJ:MIN RM   SIZE RO TYPE  MOUNTPOINTS
 sdb                                             8:0    1 117,2G  0 disk
-ââsdb1                                          8:1    1 117,2G  0 part  /run/media/qubasa/INTENSO
+└─sdb1                                          8:1    1 117,2G  0 part  /run/media/qubasa/INTENSO
 nvme0n1                                       259:0    0   1,8T  0 disk
-âânvme0n1p1                                   259:1    0   512M  0 part  /boot
-âânvme0n1p2                                   259:2    0   1,8T  0 part
-    ââluks-f7600028-9d83-4967-84bc-dd2f498bc486 254:0    0   1,8T  0 crypt /nix/store
+├─nvme0n1p1                                   259:1    0   512M  0 part  /boot
+└─nvme0n1p2                                   259:2    0   1,8T  0 part
+    └─luks-f7600028-9d83-4967-84bc-dd2f498bc486 254:0    0   1,8T  0 crypt /nix/store
 ```
 
 Unmount the device; replace `sdb` below with your own identifier, and repeat for each mounted partition, for example:
