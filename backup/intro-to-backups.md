@@ -4,6 +4,194 @@
 
 # ROUGH NOTES, RANDOM SCRIBBLINGS TO BE REWRITTEN INTO DOC
 
+
+
+
+### Let's move this next part to a later example
+If you want to see the actual encrypted backup data on backup-server:
+
+```bash
+clan ssh backup-server
+```
+
+Then:
+```
+cd /var/lib/borgbackup/alice-laptop/
+ls -l
+```
+You should see:
+
+```
+total 68
+-rw------- 1 borg borg   700 Mar 30 03:53 config
+drwx------ 3 borg borg  4096 Mar 30 03:53 data
+-rw------- 1 borg borg   155 Mar 30 03:53 hints.13
+-rw------- 1 borg borg 41258 Mar 30 03:53 index.13
+-rw------- 1 borg borg   190 Mar 30 03:53 integrity.13
+-rw------- 1 borg borg    16 Mar 30 03:53 nonce
+-rw------- 1 borg borg    73 Mar 30 03:53 README
+```
+
+To see how much total space is being used:
+
+```bash
+du -sh
+```
+
+You should see something similar to this:
+
+```
+356K	.
+```
+
+Now run another backup without changing anything. Borg will detect that there's nothing to do and only store a bit of metadata about the backup. Back on the setup machine:
+
+```
+clan backups create alice-laptop
+```
+
+Now log into the backup server and repeat the above steps. When you run du -sh it shouldn't change much, perhaps 5 or 6 kilobytes.
+
+
+## Two clients, plus ZeroTier
+
+clan machines create alice-laptop
+clan machines create bob-laptop
+clan machines create backup-server
+
+```nix
+    alice-laptop = {
+        deploy.targetHost = "<IP-ADDRESS>"; # REPLACE WITH ALICE'S IP ADDRESS; keep "root@"
+        tags = [ ];
+    };
+    alice-laptop = {
+        deploy.targetHost = "<IP-ADDRESS>"; # REPLACE WITH BOB'S IP ADDRESS; keep "root@"
+        tags = [ ];
+    };
+    backup-server = {
+        deploy.targetHost = "<IP-ADDRESS>"; # REPLACE WITH BACKUP'S IP ADDRESS; keep "root@"
+        tags = [ ];
+    };
+```
+
+Here we'll demonstrate deduplication.
+
+First create on Alice's computer:
+
+cd documents
+
+Create a 20MB file called big_demo_file.txt
+```bash
+yes "This is a repeating line of text for Freckleface's Clan backup demo. " | head -c $((20 * 1024 * 1024)) > big_demo_file.txt
+```
+
+Back on setup machine:
+
+```bash
+clan backups create alice-laptop
+```
+
+
+On Bob's computer:
+
+```bash
+cd documents
+yes "This is a repeating line of text for Freckleface's Clan backup demo. " | head -c $((20 * 1024 * 1024)) > big_demo_file.txt
+```
+
+
+Modify one byte roughly in the middle:
+
+```bash
+echo -n "Z" | dd of=big_demo_file.txt bs=1 seek=10000000 count=1 conv=notrunc
+```
+
+
+## More NOTES
+
+It sounds like you can backup to Hetzner's equivalent to S3? Need to check the existing docs.
+
+Talk about multiple states and why we might need them. Example:
+
+```nix
+  clan.core.state."my-documents" = { # <--- This implies you can have multiple states
+    folders = [
+      "/home/alice/documents"
+      "/home/alice/pictures"
+    ];
+  };
+}
+```
+
+Now 
+
+Talk about hooks, scripts, etc.
+
+Can you choose a folder to include and exclude some subfolder under one of them?
+
+
+
+# FIRST DRAFT
+
+Clan makes it easy to back your machines up from one to another. You define what to back up and where to send it, and Clan handles the rest: encryption, scheduling, and restoration.
+
+---
+
+## How Clan Backups Work
+
+Clan backups have two parts:
+
+1. **What to back up**: folders, databases, application state
+2. **Where to send it**: another machine in your clan
+
+Under the hood, Clan uses [BorgBackup](https://www.borgbackup.org/), which provides:
+
+- **Deduplication**: only stores changes, saving disk space
+- **Encryption**: backups are encrypted before leaving the machine
+- **Compression**: smaller backups, faster transfers
+
+You don't need to know BorgBackup to use Clan backups. Clan configures everything for you.
+
+---
+
+## The Basic Setup
+
+### 1. Define What to Back Up
+
+On each machine, you define a **state**, which refers to the folders and data that are to be included in the backup. This goes in the machine's machines part:
+
+```nix
+  machines = {
+
+    alice-laptop = { ... }: {
+      clan.core.state."my-documents" = {
+        folders = [
+          "/home/alice/documents"
+          "/home/alice/pictures"
+        ];
+      };
+    };
+```
+
+**Why "state" instead of "backup"?** The `clan.core.state` option declares "this data is important" and that it's not specific to backups. The backup service reads your state definitions and includes them automatically. This separation means you define what matters once, and different services (backup, restore, migration) can all use it. If you ever switch backup tools, your state definitions stay the same.
+
+### 2. Set Up the Backup Service
+
+In your `clan.nix`, add the borgbackup service with **client** and **server** roles:
+
+```nix
+inventory.instances.borgbackup = {
+  roles.client.machines."my-laptop" = {};
+  roles.server.machines."my-server" = {};
+};
+```
+
+This says: "Back up my-laptop to my-server." Clients send backups; servers store them.
+
+## Full Working Example
+
+Before proceding to advanced settings, we're presenting you with a step-by-step example, as that will demonstrate exactly how to use backups.
+
 Start up two machines. If you're using either Virtual Box or a cloud server, we suggest naming them appropriately, such as Clan-Alice and Clan-Backup. Then make note of both instances IP address.
 
 
@@ -251,10 +439,10 @@ clan machines update alice-laptop
 clan machines update backup-server
 ```
 
-Ready to test:
+Ready to try it out:
 
 ```bash
-creating backup for alice-laptop
+clan backups create alice-laptop
 ```
 
 Should see:
@@ -263,121 +451,54 @@ Should see:
 successfully started backup
 ```
 
-If you want to see the actual encrypted backup data on backup-server:
+Wait a minute or so, and then list the backups:
 
 ```bash
-clan ssh backup-server
+clan backups list alice-laptop
 ```
 
-Then:
-```
-ls -l /var/lib/borgbackup/alice-laptop/
-```
-You should see:
+You'll see a list similar to this:
 
 ```
-total 68
--rw------- 1 borg borg   700 Mar 30 03:53 config
-drwx------ 3 borg borg  4096 Mar 30 03:53 data
--rw------- 1 borg borg   155 Mar 30 03:53 hints.13
--rw------- 1 borg borg 41258 Mar 30 03:53 index.13
--rw------- 1 borg borg   190 Mar 30 03:53 integrity.13
--rw------- 1 borg borg    16 Mar 30 03:53 nonce
--rw------- 1 borg borg    73 Mar 30 03:53 README
+backup-server::borg@10.0.0.40:.::alice-laptop-backup-server-2026-03-30T03:53:34
 ```
 
-## More NOTES
+Next, delete a file from Alice's computer. Log into alice-laptop, and then:
 
-It sounds like you can backup to Hetzner's equivalent to S3? Need to check the existing docs.
-
-Talk about multiple states and why we might need them. Example:
-
-```nix
-  clan.core.state."my-documents" = { # <--- This implies you can have multiple states
-    folders = [
-      "/home/alice/documents"
-      "/home/alice/pictures"
-    ];
-  };
-}
+```
+cd documents
+rm welcome.md
+ls
 ```
 
-Now 
-
-Talk about hooks, scripts, etc.
-
-Can you choose a folder to include and exclude some subfolder under one of them?
+The file `welcome.md` will be gone.
 
 
+Now back on the setup machine, first list the backups again:
 
-# FIRST DRAFT
-
-Clan makes it easy to back your machines up from one to another. You define what to back up and where to send it, and Clan handles the rest: encryption, scheduling, and restoration.
-
----
-
-## How Clan Backups Work
-
-Clan backups have two parts:
-
-1. **What to back up**: folders, databases, application state
-2. **Where to send it**: another machine in your clan
-
-Under the hood, Clan uses [BorgBackup](https://www.borgbackup.org/), which provides:
-
-- **Deduplication**: only stores changes, saving disk space
-- **Encryption**: backups are encrypted before leaving the machine
-- **Compression**: smaller backups, faster transfers
-
-You don't need to know BorgBackup to use Clan backups. Clan configures everything for you.
-
----
-
-## The Basic Setup
-
-### 1. Define What to Back Up
-
-On each machine, you define a **state**, which refers to the folders and data that are to be included in the backup. This goes in the machine's machines part:
-
-```nix
-  machines = {
-
-    alice-laptop = { ... }: {
-      clan.core.state."my-documents" = {
-        folders = [
-          "/home/alice/documents"
-          "/home/alice/pictures"
-        ];
-      };
-    };
+```bash
+clan backups list alice-laptop
 ```
 
-**Note:** While `clan.nix` holds your inventory (services, machines, roles), each machine also has its own `configuration.nix` file for machine-specific settings. You're encouraged to edit these files as needed if you need per-machine customization.
+You'll see a list similar to this:
 
-**Why "state" instead of "backup"?** The `clan.core.state` option declares "this data is important" and that it's not specific to backups. The backup service reads your state definitions and includes them automatically. This separation means you define what matters once, and different services (backup, restore, migration) can all use it. If you ever switch backup tools, your state definitions stay the same.
-
-### 2. Set Up the Backup Service
-
-In your `clan.nix`, add the borgbackup service with **client** and **server** roles:
-
-```nix
-inventory.instances.borgbackup = {
-  roles.client.machines."my-laptop" = {};
-  roles.server.machines."my-server" = {};
-};
+```
+backup-server::borg@10.0.0.40:.::alice-laptop-backup-server-2026-03-30T03:53:34
 ```
 
-This says: "Back up my-laptop to my-server." Clients send backups; servers store them.
+Depending how many times you ran the backup command, you might see more listed. Copy the last one to the clipboard.
 
----
+```bash
+clan backups restore alice-laptop borgbackup <PASTE>
+```
 
-## TODO: FULL WORKING EXAMPLE - USE EXAMPLE STEPS FROM ROUGH NOTES
+For `<PASTE>` paste the backup name from the clipboard, such as:
 
-### Prerequisites
-    
-* One Clan created for testing
-* Two machines added to the Clan. Call one "alice" to represent an actual user's computer, and the other "backups" to represent a machine dedicated to backups. 
+```bash
+clan backups restore alice-laptop borgbackup backup-server::borg@10.0.0.40:.::alice-laptop-backup-server-2026-03-31T03:08:51
+```
 
+Back on Alice's machine, return to the `documents` directory, and type `ls` and you'll see that the `welcome.md` file will be back.
 
 
 ---
