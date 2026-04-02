@@ -195,8 +195,6 @@ There are four hooks available:
 | `preRestoreScript` | Before a restore starts |
 | `postRestoreScript` | After a restore finishes |
 
----
-
 ## Excluding Files
 
 You can exclude certain file patterns from backups:
@@ -216,8 +214,6 @@ inventory.instances = {
   };
 };
 ```
-
----
 
 ## External Backup Destinations
 
@@ -248,8 +244,6 @@ clan vars get alice-laptop borgbackup/borgbackup.ssh.pub | ssh -p23 user-sub1@us
 
 You can combine internal (server role) and external destinations. The client will back up to all of them.
 
----
-
 ## PostgreSQL Database Backups
 
 Clan has built-in support for PostgreSQL. Instead of manually writing pre/post scripts to dump and restore databases, you can use the PostgreSQL module:
@@ -278,8 +272,6 @@ This automatically:
 - Stops the listed services during restore
 - Recreates the database with the correct settings on restore
 
----
-
 ## A Machine Can Be Both Client and Server
 
 A machine can back up other machines (server role) while also backing itself up somewhere else (client role). For example, your NAS stores backups from your workstations, but also backs itself up to an offsite storage box:
@@ -304,45 +296,6 @@ inventory.instances = {
   };
 };
 ```
-
----
-
-## How It All Fits Together
-
-Here's the mental model:
-
-```
-┌────────────────────────────┐
-│  clan.nix (Inventory)      │   You define roles: who backs up, who stores
-└────────────┬───────────────┘
-             │
-             ▼
-┌────────────────────────────┐
-│  State definitions         │   Each machine declares what data matters
-│  (configuration.nix)       │   (folders, databases, hooks)
-└────────────┬───────────────┘
-             │
-             ▼
-┌────────────────────────────┐
-│  Vars / Secrets            │   Clan auto-generates SSH keys and
-│  (clan vars generate)      │   encryption keys
-└────────────┬───────────────┘
-             │
-             ▼
-┌────────────────────────────┐
-│  Backup runs               │   Scheduled (systemd timer) or manual
-│  (clan backups create)     │   (clan backups create <machine>)
-└────────────────────────────┘
-```
-
-1. **`clan.nix`** defines which machines are clients and servers
-2. **`configuration.nix`** on each machine defines what data to back up (state)
-3. **`clan vars generate`** creates the encryption and SSH keys
-4. **`clan machines update`** deploys the configuration
-5. Backups run on schedule, or you trigger them with `clan backups create`
-6. Restore with `clan backups restore`
-
----
 
 ## Complete Examples
 
