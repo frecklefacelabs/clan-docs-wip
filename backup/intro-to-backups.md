@@ -15,7 +15,7 @@ Clan backups have two parts:
 
 Under the hood, Clan uses [BorgBackup](https://www.borgbackup.org/), which provides:
 
-- **Deduplication**: only stores changes, saving disk space
+- **Deduplication**: If two identical files are backed up, they only occupy a single set of data on the backup server
 - **Encryption**: backups are encrypted before leaving the machine
 - **Compression**: smaller backups, faster transfers
 
@@ -42,11 +42,11 @@ On each machine, you define a **state**, which refers to the folders and data th
     };
 ```
 
-**Why "state" instead of "backup"?** The `clan.core.state` option declares "this data is important" and that it's not specific to backups. The backup service reads your state definitions and includes them automatically. This separation means you define what matters once, and different services (backup, restore, migration) can all use it. If you ever switch backup tools, your state definitions stay the same.
+**Why "state" instead of "backup"?** The `clan.core.state` option declares "this data is important" and that it's not specific to backups. The backup service reads your state definitions and includes them automatically. This separation means you define what matters once, and different services (backup, restore, migration) can all use it. If you ever switch backup tools, your state definitions stays the same.
 
 ### 2. Set Up the Backup Service
 
-In your `clan.nix`, add the borgbackup service with **client** and **server** roles:
+In your `clan.nix`, add the `borgbackup` service with **client** and **server** roles:
 
 ```nix
 inventory.instances.borgbackup = {
@@ -59,12 +59,9 @@ This says: "Back up alice-laptop to backup-server." Clients send backups; server
 
 ## Starting Example
 
-Before proceding to advanced settings, we're presenting you with a step-by-step example, as that will demonstrate exactly how to use backups.
+Before proceding, we're presenting you with a step-by-step example that demonstrates how to use backups.
 
-Prerequisites
-You should be familiar with how to set up a machine on Clan. If not, please follow the steps [here]().
-
-Start up two machines. If you're using either Virtual Box or a cloud server, we suggest naming them appropriately, such as Clan-Alice and Clan-Backup. Then make note of both instances IP address.
+Start up two machines under a single . If you're using either Virtual Box or a cloud server, we suggest naming them appropriately, such as Clan-Alice and Clan-Backup. Then make note of both instances IP address.
 
 ```bash
 nix run "https://git.clan.lol/clan/clan-core/archive/main.tar.gz#clan-cli" --refresh -- init
@@ -138,11 +135,11 @@ Now gather both hardware settings:
 ```bash
 clan machines init-hardware-config alice-laptop
 ```
-type Y
+type Y.
 
 If you're using VirtualBox, enter password shown on the screen for Alice. (If it's obstructed by text, press Ctrl+C followed by Ctrl+D.)
 
-And now the backup-server:
+And now the backup-server; from the same clan directory, type:
 
 ```
 clan machines init-hardware-config backup-server
@@ -180,7 +177,6 @@ TODO: INVESTIGATE THIS NEXT PART AS I'M NOT SURE IT HAPPENED EVERY TIME
 clan vars generate alice-laptop --no-sandbox
 clan vars generate backup-server --no-sandbox
 ```
-
 
 If using VirtualBox, reboot both machines, removing the virtual ISO disk in between. For detailed instructions, visit [...]().
 
@@ -383,10 +379,10 @@ A machine can be both. For example, you might store backups from your laptops (s
 By default, Clan backs up:
 
 - Any folders you define in `clan.core.state`
-- PostgreSQL databases (if you enable the PostgreSQL modle)
+- PostgreSQL databases (if you enable the PostgreSQL module)
 - Secrets and vars needed by your services
 
-You can also add **hooks**, which are scripts that run before or after backups, to handle special cases like stopping a service before backing up its data.
+You can also add **hooks**, which are scrpts that run before or after backups, to handle special cases like stopping a service before backing up its data.
 
 ## Running a Backup
 
@@ -451,13 +447,3 @@ inventory.instances = {
   };
 };
 ```
-
-## Quick Reference
-
-| Command | What It Does |
-|---------|-------------|
-| `clan backups create <machine>` | Trigger a backup right now |
-| `clan backups list <machine>` | List available backups |
-| `clan backups restore <machine> borgbackup <name>` | Restore from a specific backup |
-| `clan vars get <machine> borgbackup/borgbackup.ssh.pub` | Get the generated SSH public key. Use for clients. |
-
