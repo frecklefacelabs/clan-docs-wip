@@ -2,134 +2,61 @@
 # Early Draft -- Under Active Development
 # >>> NOT READY FOR EDITS <<<
 
-# ROUGH NOTES, RANDOM SCRIBBLINGS TO BE REWRITTEN INTO DOC
+## ROUGH NOTES -- DO NOT EDIT, AS THESE ARE JUST MY RANDOM SCRIBBLINGS
 
+### Backup with Postgres - how to pause a service before backing it up
 
+Create a new clan, call it CLAN-BACKUP-POSTGRES with domain clanpostgres.lol
 
+Create three machines: alice-laptop, postgres-server, backup-server
 
-### Let's move this next part to a later example
-If you want to see the actual encrypted backup data on backup-server:
-
-```bash
-clan ssh backup-server
 ```
+clan machines create alice-laptop
+clan machines create postgres-server
+clan machines create backup-server
+```
+
+Create the clan.nix file. Instead of going through the whole step-by-step instructions, here is the entire clan.nix file; paste in the appropriate IP addresses and the key file contents.
+
+[paste here]
+
+Then gather machine info:
+
+```
+clan machines init-hardware-config alice-laptop
+clan machines init-hardware-config postgres-server
+clan machines init-hardware-config backup-server
+```
+
+Setup disks (repeat each one twice as usual):
+
+```
+clan templates apply disk ext4-single-disk alice-laptop --set mainDisk ""
+clan templates apply disk ext4-single-disk postgres-server --set mainDisk ""
+clan templates apply disk ext4-single-disk backup-server --set mainDisk ""
+```
+
+If necessary:
+```
+clan vars generate alice-laptop --no-sandbox
+clan vars generate postgres-server --no-sandbox
+clan vars generate backup-server --no-sandbox
+```
+[Still need to investigate: alice-laptop issues an error at the end, and it seems I need to re-run alice-laptop?]
+
+And install:
+
+```
+clan machines install alice-laptop
+clan machines install postgres-server
+clan machines install backup-server
+```
+
+If using VirtualBox, remove the install disk on each machine.
 
 Then:
-```
-cd /var/lib/borgbackup/alice-laptop/
-ls -l
-```
-You should see:
 
-```
-total 68
--rw------- 1 borg borg   700 Mar 30 03:53 config
-drwx------ 3 borg borg  4096 Mar 30 03:53 data
--rw------- 1 borg borg   155 Mar 30 03:53 hints.13
--rw------- 1 borg borg 41258 Mar 30 03:53 index.13
--rw------- 1 borg borg   190 Mar 30 03:53 integrity.13
--rw------- 1 borg borg    16 Mar 30 03:53 nonce
--rw------- 1 borg borg    73 Mar 30 03:53 README
-```
-
-To see how much total space is being used:
-
-```bash
-du -sh
-```
-
-You should see something similar to this:
-
-```
-356K	.
-```
-
-Now run another backup without changing anything. Borg will detect that there's nothing to do and only store a bit of metadata about the backup. Back on the setup machine:
-
-```
-clan backups create alice-laptop
-```
-
-Now log into the backup server and repeat the above steps. When you run du -sh it shouldn't change much, perhaps 5 or 6 kilobytes.
-
-
-## Two clients, plus ZeroTier
-
-clan machines create alice-laptop
-clan machines create bob-laptop
-clan machines create backup-server
-
-```nix
-    alice-laptop = {
-        deploy.targetHost = "<IP-ADDRESS>"; # REPLACE WITH ALICE'S IP ADDRESS; keep "root@"
-        tags = [ ];
-    };
-    alice-laptop = {
-        deploy.targetHost = "<IP-ADDRESS>"; # REPLACE WITH BOB'S IP ADDRESS; keep "root@"
-        tags = [ ];
-    };
-    backup-server = {
-        deploy.targetHost = "<IP-ADDRESS>"; # REPLACE WITH BACKUP'S IP ADDRESS; keep "root@"
-        tags = [ ];
-    };
-```
-
-Here we'll demonstrate deduplication.
-
-First create on Alice's computer:
-
-cd documents
-
-Create a 20MB file called big_demo_file.txt
-```bash
-yes "This is a repeating line of text for Freckleface's Clan backup demo. " | head -c $((20 * 1024 * 1024)) > big_demo_file.txt
-```
-
-Back on setup machine:
-
-```bash
-clan backups create alice-laptop
-```
-
-
-On Bob's computer:
-
-```bash
-cd documents
-yes "This is a repeating line of text for Freckleface's Clan backup demo. " | head -c $((20 * 1024 * 1024)) > big_demo_file.txt
-```
-
-
-Modify one byte roughly in the middle:
-
-```bash
-echo -n "Z" | dd of=big_demo_file.txt bs=1 seek=10000000 count=1 conv=notrunc
-```
-
-
-## More NOTES
-
-It sounds like you can backup to Hetzner's equivalent to S3? Need to check the existing docs.
-
-Talk about multiple states and why we might need them. Example:
-
-```nix
-  clan.core.state."my-documents" = { # <--- This implies you can have multiple states
-    folders = [
-      "/home/alice/documents"
-      "/home/alice/pictures"
-    ];
-  };
-}
-```
-
-Now 
-
-Talk about hooks, scripts, etc.
-
-Can you choose a folder to include and exclude some subfolder under one of them?
-
-
+ssh into Alice and create some files.
 
 
 
@@ -164,7 +91,9 @@ Here are some examples of the pattern:
 
 Sometimes you need to stop a service before backing up its data (to avoid corrupted files), then start it again after. Clan supports this with hooks.
 
-Hooks are defined as part of state, not as part of the backup service -- because stopping a service before a backup is really about the *data*, not the backup tool.
+Hooks are defined as part of state, not as part of the backup service, because stopping a service before a backup is really about the *data*, not the backup tool.
+
+In the following example, the preBackupScript stops the NextCloud service. 
 
 ```nix
 # machines/alice-laptop/configuration.nix
