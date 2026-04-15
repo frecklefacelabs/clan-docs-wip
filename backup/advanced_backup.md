@@ -2,193 +2,6 @@
 # Early Draft -- Under Active Development
 # >>> NOT READY FOR EDITS <<<
 
-## ROUGH NOTES -- DO NOT EDIT, AS THESE ARE JUST MY RANDOM SCRIBBLINGS
-
-### Backup with Postgres - how to pause a service before backing it up
-
-Create a new clan, call it CLAN-BACKUP-POSTGRES with domain clanpostgres.lol
-
-Create three machines: alice-laptop, postgres-server, backup-server
-
-```
-clan machines create alice-laptop
-clan machines create postgres-server
-clan machines create backup-server
-```
-
-Create the clan.nix file. Instead of going through the whole step-by-step instructions, here is the entire clan.nix file; paste in the appropriate IP addresses and the key file contents.
-
-[paste here]
-
-Then gather machine info:
-
-```
-clan machines init-hardware-config alice-laptop
-clan machines init-hardware-config postgres-server
-clan machines init-hardware-config backup-server
-```
-
-Setup disks (repeat each one twice as usual):
-
-```
-clan templates apply disk ext4-single-disk alice-laptop --set mainDisk ""
-clan templates apply disk ext4-single-disk postgres-server --set mainDisk ""
-clan templates apply disk ext4-single-disk backup-server --set mainDisk ""
-```
-
-If necessary: (Do backup-server first, since the others depend on it.)
-```
-clan vars generate backup-server --no-sandbox
-clan vars generate alice-laptop --no-sandbox
-clan vars generate postgres-server --no-sandbox
-```
-[Still need to investigate: alice-laptop issues an error at the end, and it seems I need to re-run alice-laptop?]
-
-[The above is due to dependencies. If you see the error about secrets missing, plan to come back at the end and re-run that one. But what about the case where we don't need "no-sandbox"???]
-
-And install:
-
-```
-clan machines install backup-server
-clan machines install alice-laptop
-clan machines install postgres-server
-```
-
-If using VirtualBox, remove the install disk on each machine.
-
-Then:
-
-ssh into Alice and create some files.
-
-
-
-Installation Order
-                                                                                                                                                                      
-  When setting up borgbackup (or any service with cross-machine dependencies), the order in which you install your machines matters.
-
-  The borgbackup client needs the server's SSH host key to establish trust. This key is generated during the server's installation. If you install a client machine before the server, the client won't be able to find the server's key, and you'll need to re-generate its vars afterward.
-                                                                                                                                                                      
-  To avoid this, install the backup server before any client machines:
-  
-  clan machines install backup-server --target-host root@<BACKUP-IP>
-
-  clan machines install db-server --target-host root@<DB-IP>
-
-  clan machines install alice-laptop --target-host root@<ALICE-IP>
-
-  If you're using --no-sandbox and generating vars manually, the same order applies:
-  
-  clan vars generate backup-server --no-sandbox
-
-  clan vars generate db-server --no-sandbox
-
-  clan vars generate alice-laptop --no-sandbox
-
-
-  This applies to any service where one machine depends on another machine's generated secrets — always install or generate vars for the machine that provides the secret before the machines that consume it.
-
-
-```nix
-{
-  # Ensure this is unique among all clans you want to use.
-  meta.name = "MY-BACKUP-CLAN";
-  meta.domain = "mybackupclan.lol";
-
-  inventory.machines = {
-    alice-laptop = {
-        deploy.targetHost = "root@192.168.56.101";
-        tags = [ "employees" ];
-    };
-    backup-server = {
-        deploy.targetHost = "root@192.168.56.104";
-        tags = [ ];
-    };
-    postgres-server = {
-        deploy.targetHost = "root@192.168.56.102";
-        tags = [ ];
-    };
-  };
-
-  inventory.instances = {
-    borgbackup = {
-      roles.client.tags = [ "employees" ]; # OR: roles.client.tags.employees.settings.exclude = [ "*.bak" ];
-      roles.client.machines."postgres-server" = {};
-      roles.server.machines."backup-server" = {
-        settings.address = "192.168.56.104";
-        settings.directory = "/var/lib/borgbackup";
-      };
-    };
-
-    user-alice = {
-      module.name = "users";
-      roles.default.machines."alice-laptop" = {};
-      roles.default.tags = [ "all" ];
-      roles.default.settings = {
-        user = "alice";
-        openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop" ];
-      };
-    };
-
-    sshd = {
-      roles.server.tags.all = { };
-      roles.server.settings.authorizedKeys = {
-        "admin-machine-1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop";
-      };
-    };
-
-    user-root = {
-      module.name = "users";
-      roles.default.tags.all = { };
-      roles.default.settings = {
-        user = "root";
-        prompt = true;
-      };
-    };
-  };
-
-  machines = {
-
-    alice-laptop = { ... }: {
-      systemd.tmpfiles.rules = [
-        "d /home/alice/documents 0755 alice users -"
-        "d /home/alice/pictures 0755 alice users -"
-      ];
-
-      clan.core.state."my-documents" = {
-        folders = [
-          "/home/alice/documents"
-          "/home/alice/pictures"
-        ];
-      };
-    };
-
-
-    postgres-server = { config, ... }: {
-      services.postgresql = {
-        enable = true;
-        ensureDatabases = [ "mydb" ];
-      };
-                                                                                                                                                                      
-      clan.core.postgresql.enable = true;
-      clan.core.postgresql.databases.mydb = { };                                                                                                                  
-                  
-      clan.core.state."postgresql" = {                                                                                                                                  
-        folders = [];
-        preBackupScript = ''                                                                                                                                            
-          systemctl stop postgresql
-        '';
-        postBackupScript = ''
-          systemctl start postgresql
-        '';
-      };
-    };
-  
-
-  };
-}
-```
-
-
 # MAIN TEXT
 
 ## Backup Hooks: Pre/Post Scripts
@@ -343,7 +156,24 @@ Below is a clan.nix file that demonstrates how to back up two machines:
 
 - A database server named postgres-server
 
+to a single machine called backup-server.
+
 Note also that alice-machine has a tag called "employees" and then provides an attribute in borgbackup that backs up any machine with that tag.
+
+### Installation Order
+
+When setting up borgbackup (or any service with cross-machine dependencies), the order in which you install your machines matters.
+
+The borgbackup client needs the server's SSH host key to establish connection to the borgbackup server. This key is generated during the borgbackup server's installation. If you install a client machine before the server, the client won't be able to find the server's key, and you'll need to re-generate its vars afterward. To avoid this, install the backup server before any client machines:
+  
+clan machines install backup-server --target-host root@<BACKUP-IP>
+
+clan machines install db-server --target-host root@<DB-IP>
+
+clan machines install alice-laptop --target-host root@<ALICE-IP>
+
+This applies to any service where one machine depends on another machine's generated secrets — always install or generate vars for the machine that provides the secret before the machines that consume it.
+
 
 ```nix
 {
@@ -504,6 +334,35 @@ Here are some examples of the pattern:
 | `*-*-* *:00:00` | Every hour |
 | `Mon *-*-* 03:00:00` | Every Monday at 3 AM |
 
+Below is a partial clan.nix file that demontrates three workstations backing up to a NAS, each on different schedules.
+
+
+```nix
+# clan.nix
+{
+  inventory.machines = {
+    laptop    = { deploy.targetHost = "root@192.168.1.10"; tags = [ "workstation" ]; };
+    desktop   = { deploy.targetHost = "root@192.168.1.11"; tags = [ "workstation" ]; };
+    work-pc   = { deploy.targetHost = "root@192.168.1.12"; tags = [ "workstation" ]; };
+    nas       = { deploy.targetHost = "root@192.168.1.50"; };
+  };
+
+  inventory.instances = {
+    borgbackup = {
+      roles.client.machines = {
+        "laptop"  = { settings.startAt = "*-*-* 02:00:00"; };    # 2 AM
+        "desktop" = { settings.startAt = "*-*-* 03:00:00"; };    # 3 AM
+        "work-pc" = { settings.startAt = "*-*-* 04:00:00"; };    # 4 AM
+      };
+      roles.server.machines."nas" = {
+        settings.address = "192.168.1.50";
+        settings.directory = "/data/backups";
+      };
+    };
+  };
+}
+```
+
 
 
 ## External Backup Destinations
@@ -661,34 +520,5 @@ inventory.instances = {
 };
 ```
 
-## Example: Multiple Machines with Custom Schedules
-
-Three workstations backing up to a NAS, each on different schedules.
-
-```nix
-# clan.nix
-{
-  inventory.machines = {
-    laptop    = { deploy.targetHost = "root@192.168.1.10"; tags = [ "workstation" ]; };
-    desktop   = { deploy.targetHost = "root@192.168.1.11"; tags = [ "workstation" ]; };
-    work-pc   = { deploy.targetHost = "root@192.168.1.12"; tags = [ "workstation" ]; };
-    nas       = { deploy.targetHost = "root@192.168.1.50"; };
-  };
-
-  inventory.instances = {
-    borgbackup = {
-      roles.client.machines = {
-        "laptop"  = { settings.startAt = "*-*-* 02:00:00"; };    # 2 AM
-        "desktop" = { settings.startAt = "*-*-* 03:00:00"; };    # 3 AM
-        "work-pc" = { settings.startAt = "*-*-* 04:00:00"; };    # 4 AM
-      };
-      roles.server.machines."nas" = {
-        settings.address = "192.168.1.50";
-        settings.directory = "/data/backups";
-      };
-    };
-  };
-}
-```
 
 
