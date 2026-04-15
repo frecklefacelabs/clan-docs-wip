@@ -36,20 +36,22 @@ clan templates apply disk ext4-single-disk postgres-server --set mainDisk ""
 clan templates apply disk ext4-single-disk backup-server --set mainDisk ""
 ```
 
-If necessary:
+If necessary: (Do backup-server first, since the others depend on it.)
 ```
+clan vars generate backup-server --no-sandbox
 clan vars generate alice-laptop --no-sandbox
 clan vars generate postgres-server --no-sandbox
-clan vars generate backup-server --no-sandbox
 ```
 [Still need to investigate: alice-laptop issues an error at the end, and it seems I need to re-run alice-laptop?]
+
+[The above is due to dependencies. If you see the error about secrets missing, plan to come back at the end and re-run that one. But what about the case where we don't need "no-sandbox"???]
 
 And install:
 
 ```
+clan machines install backup-server
 clan machines install alice-laptop
 clan machines install postgres-server
-clan machines install backup-server
 ```
 
 If using VirtualBox, remove the install disk on each machine.
@@ -57,6 +59,422 @@ If using VirtualBox, remove the install disk on each machine.
 Then:
 
 ssh into Alice and create some files.
+
+
+
+Installation Order
+                                                                                                                                                                      
+  When setting up borgbackup (or any service with cross-machine dependencies), the order in which you install your machines matters.
+
+  The borgbackup client needs the server's SSH host key to establish trust. This key is generated during the server's installation. If you install a client machine before the server, the client won't be able to find the server's key, and you'll need to re-generate its vars afterward.
+                                                                                                                                                                      
+  To avoid this, install the backup server before any client machines:
+  
+  clan machines install backup-server --target-host root@<BACKUP-IP>
+
+  clan machines install db-server --target-host root@<DB-IP>
+
+  clan machines install alice-laptop --target-host root@<ALICE-IP>
+
+  If you're using --no-sandbox and generating vars manually, the same order applies:
+  
+  clan vars generate backup-server --no-sandbox
+
+  clan vars generate db-server --no-sandbox
+
+  clan vars generate alice-laptop --no-sandbox
+
+
+  This applies to any service where one machine depends on another machine's generated secrets — always install or generate vars for the machine that provides the secret before the machines that consume it.
+
+
+```nix
+{
+  # Ensure this is unique among all clans you want to use.
+  meta.name = "MY-BACKUP-CLAN";
+  meta.domain = "mybackupclan.lol";
+
+  inventory.machines = {
+    alice-laptop = {
+        deploy.targetHost = "root@192.168.56.101";
+        tags = [ "employees" ];
+    };
+    backup-server = {
+        deploy.targetHost = "root@192.168.56.104";
+        tags = [ ];
+    };
+    postgres-server = {
+        deploy.targetHost = "root@192.168.56.102";
+        tags = [ ];
+    };
+  };
+
+  inventory.instances = {
+    borgbackup = {
+      roles.client.tags = [ "employees" ]; # OR: roles.client.tags.employees.settings.exclude = [ "*.bak" ];
+      roles.client.machines."postgres-server" = {};
+      roles.server.machines."backup-server" = {
+        settings.address = "192.168.56.104";
+        settings.directory = "/var/lib/borgbackup";
+      };
+    };
+
+    user-alice = {
+      module.name = "users";
+      roles.default.machines."alice-laptop" = {};
+      roles.default.tags = [ "all" ];
+      roles.default.settings = {
+        user = "alice";
+        openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop" ];
+      };
+    };
+
+    sshd = {
+      roles.server.tags.all = { };
+      roles.server.settings.authorizedKeys = {
+        "admin-machine-1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop";
+      };
+    };
+
+    user-root = {
+      module.name = "users";
+      roles.default.tags.all = { };
+      roles.default.settings = {
+        user = "root";
+        prompt = true;
+      };
+    };
+  };
+
+  machines = {
+
+    alice-laptop = { ... }: {
+      systemd.tmpfiles.rules = [
+        "d /home/alice/documents 0755 alice users -"
+        "d /home/alice/pictures 0755 alice users -"
+      ];
+
+      clan.core.state."my-documents" = {
+        folders = [
+          "/home/alice/documents"
+          "/home/alice/pictures"
+        ];
+      };
+    };
+
+
+    postgres-server = { config, ... }: {
+      services.postgresql = {
+        enable = true;
+        ensureDatabases = [ "mydb" ];
+      };
+                                                                                                                                                                      
+      clan.core.postgresql.enable = true;
+      clan.core.postgresql.databases.mydb = { };                                                                                                                  
+                  
+      clan.core.state."postgresql" = {                                                                                                                                  
+        folders = [];
+        preBackupScript = ''                                                                                                                                            
+          systemctl stop postgresql
+        '';
+        postBackupScript = ''
+          systemctl start postgresql
+        '';
+      };
+    };
+  
+
+  };
+}
+```
+
+
+# MAIN TEXT
+
+## Backup Hooks: Pre/Post Scripts
+
+Sometimes you need to stop a service before backing up its data (to avoid corrupted files), then start it again after. Clan supports this with hooks.
+
+Hooks are defined as part of state, not as part of the backup service, because stopping a service before a backup is really about the *data*, not the backup tool.
+
+For exapmle, you might be backing up a machine that has one or more docker containers running. You generally donl't want to back up running containers when they're running, as you might end with...
+
+The following partial example shows where you would add in the pre and post scripts, the former pausing the docker container, and the latter resuming it:
+
+```nix
+  machines = {
+
+    postgres-server = { config, ... }: {
+      services.postgresql = {
+        enable = true;
+        ensureDatabases = [ "mydatabase" ];
+      };
+
+      clan.core.postgresql.enable = true;
+      clan.core.postgresql.databases.mydatabase = { };
+                  
+      clan.core.state."postgresql" = {
+        folders = [];
+        preBackupScript = ''
+          docker pause $(docker ps -q)
+        '';
+        postBackupScript = ''
+          docker unpause $(docker ps -q)
+        '';
+      };
+    };
+systemctl stop postgresql
+  };
+
+```
+
+Other examples where you would want to use pre and post backup scripts include:
+
+- databases (we have a complete example later)
+
+- virtual machines
+
+- mail servers
+
+- monitoring tools that use an append-only approach to writing data to files
+
+- application log rotation
+
+In general, you would want to use such hooks on any service that has a live, mutable state.
+
+
+There are four hooks available:
+
+| Hook | When It Runs |
+|------|-------------|
+| `preBackupScript` | Before the backup starts |
+| `postBackupScript` | After the backup finishes |
+| `preRestoreScript` | Before a restore starts |
+| `postRestoreScript` | After a restore finishes |
+
+
+
+## PostgreSQL Database Backups
+
+Clan has built-in support for PostgreSQL. Instead of manually writing pre/post scripts to dump and restore databases, you can use the PostgreSQL module.
+
+Below is a complete example:
+
+```nix
+{
+  # Ensure this is unique among all clans you want to use.
+  meta.name = "MY-HETZNER-CLAN";
+  meta.domain = "myhetznerclan.lol";
+
+  inventory.machines = {
+    postgres-server = {
+        deploy.targetHost = "root@192.168.56.105";
+        tags = [ ];
+    };
+    # Define machines here.
+    # server = { };
+  };
+
+  # Docs: See https://docs.clan.lol/latest/services/definition/
+  inventory.instances = {
+
+    # Docs: https://docs.clan.lol/latest/services/official/sshd/
+    # SSH service for secure remote access to machines.
+    # Generates persistent host keys and configures authorized keys.
+    sshd = {
+      roles.server.tags.all = { };
+      roles.server.settings.authorizedKeys = {
+        # Insert the public key that you want to use for SSH access.
+        # All keys will have ssh access to all machines ("tags.all" means 'all machines').
+        # Alternatively set 'users.users.root.openssh.authorizedKeys.keys' in each machine
+        "admin-machine-1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop";
+      };
+    };
+
+    # Docs: https://docs.clan.lol/latest/services/official/users/
+    # Root password management for all machines.
+    user-root = {
+      module = {
+        name = "users";
+      };
+      roles.default.tags.all = { };
+      roles.default.settings = {
+        user = "root";
+        prompt = true;
+      };
+    };
+
+  };
+
+  # Additional NixOS configuration can be added here.
+  # machines/server/configuration.nix will be automatically imported.
+  # See: https://docs.clan.lol/latest/guides/inventory/autoincludes/
+  machines = {
+
+    postgres-server = { config, ... }: {
+      services.postgresql = {
+        enable = true;
+        ensureDatabases = [ "mydatabase" ];
+      };
+
+      clan.core.postgresql.enable = true;
+      clan.core.postgresql.databases.mydatabase = { };
+                  
+      clan.core.state."postgresql" = {
+        folders = [];
+        preBackupScript = ''
+          systemctl stop postgresql
+        '';
+        postBackupScript = ''
+          systemctl start postgresql
+        '';
+      };
+    };
+
+  };
+}
+```
+
+## Backing up two machines
+
+Below is a clan.nix file that demonstrates how to back up two machines:
+
+- A laptop named alice-laptop
+
+- A database server named postgres-server
+
+Note also that alice-machine has a tag called "employees" and then provides an attribute in borgbackup that backs up any machine with that tag.
+
+```nix
+{
+  # Ensure this is unique among all clans you want to use.
+  meta.name = "MY-BACKUP-CLAN";
+  meta.domain = "mybackupclan.lol";
+
+  inventory.machines = {
+    alice-laptop = {
+        deploy.targetHost = "root@192.168.56.101";
+        tags = [ "employees" ];
+    };
+    backup-server = {
+        deploy.targetHost = "root@192.168.56.104";
+        tags = [ ];
+    };
+    postgres-server = {
+        deploy.targetHost = "root@192.168.56.102";
+        tags = [ ];
+    };
+  };
+
+  inventory.instances = {
+    borgbackup = {
+      roles.client.tags = [ "employees" ];
+      roles.client.machines."postgres-server" = {};
+      roles.server.machines."backup-server" = {
+        settings.address = "192.168.56.104";
+        settings.directory = "/var/lib/borgbackup";
+      };
+    };
+
+    user-alice = {
+      module.name = "users";
+      roles.default.machines."alice-laptop" = {};
+      roles.default.tags = [ "all" ];
+      roles.default.settings = {
+        user = "alice";
+        openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop" ];
+      };
+    };
+
+    sshd = {
+      roles.server.tags.all = { };
+      roles.server.settings.authorizedKeys = {
+        "admin-machine-1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop";
+      };
+    };
+
+    user-root = {
+      module.name = "users";
+      roles.default.tags.all = { };
+      roles.default.settings = {
+        user = "root";
+        prompt = true;
+      };
+    };
+  };
+
+  machines = {
+
+    alice-laptop = { ... }: {
+      systemd.tmpfiles.rules = [
+        "d /home/alice/documents 0755 alice users -"
+        "d /home/alice/pictures 0755 alice users -"
+      ];
+
+      clan.core.state."my-documents" = {
+        folders = [
+          "/home/alice/documents"
+          "/home/alice/pictures"
+        ];
+      };
+    };
+
+
+    postgres-server = { config, ... }: {
+      services.postgresql = {
+        enable = true;
+        ensureDatabases = [ "mydb" ];
+      };
+                                                                                                                                                                      
+      clan.core.postgresql.enable = true;
+      clan.core.postgresql.databases.mydb = { };                                                                                                                  
+                  
+      clan.core.state."postgresql" = {                                                                                                                                  
+        folders = [];
+        preBackupScript = ''                                                                                                                                            
+          systemctl stop postgresql
+        '';
+        postBackupScript = ''
+          systemctl start postgresql
+        '';
+      };
+    };
+  
+
+  };
+}
+
+```
+
+## Excluding folders
+
+You can exclude files and folders from the backup using this general pattern:
+
+```nix
+roles.client.tags.employees.settings = {
+  exclude = [ "*.bak" ]; 
+}
+```
+
+This would exclude all files ending with .bak on every machine tagged with employee.
+
+Here's an example that excluded multiple files and patterns on only the machine called alice-laptop.
+
+```nix
+inventory.instances = {
+  borgbackup = {
+    roles.client.machines."alice-laptop" = {
+      settings.exclude = [
+        "*.pyc"
+        "*.tmp"
+        "__pycache__"
+        ".cache"
+      ];
+    };
+    roles.server.machines."backup-server" = {};
+  };
+};
+```
 
 
 
@@ -87,119 +505,136 @@ Here are some examples of the pattern:
 | `Mon *-*-* 03:00:00` | Every Monday at 3 AM |
 
 
-## Backup Hooks: Pre/Post Scripts
-
-Sometimes you need to stop a service before backing up its data (to avoid corrupted files), then start it again after. Clan supports this with hooks.
-
-Hooks are defined as part of state, not as part of the backup service, because stopping a service before a backup is really about the *data*, not the backup tool.
-
-In the following example, the preBackupScript stops the NextCloud service. 
-
-```nix
-# machines/alice-laptop/configuration.nix
-{ config, lib, ... }:
-{
-  clan.core.state.nextcloud = {
-    folders = [ "/var/lib/nextcloud" ];
-
-    preBackupScript = ''
-      export PATH=${lib.makeBinPath [ config.systemd.package ]}
-      systemctl stop phpfpm-nextcloud.service
-    '';
-
-    postBackupScript = ''
-      export PATH=${lib.makeBinPath [ config.systemd.package ]}
-      systemctl start phpfpm-nextcloud.service
-    '';
-  };
-}
-```
-
-There are four hooks available:
-
-| Hook | When It Runs |
-|------|-------------|
-| `preBackupScript` | Before the backup starts |
-| `postBackupScript` | After the backup finishes |
-| `preRestoreScript` | Before a restore starts |
-| `postRestoreScript` | After a restore finishes |
-
-## Excluding Files
-
-You can exclude certain file patterns from backups:
-
-```nix
-inventory.instances = {
-  borgbackup = {
-    roles.client.machines."alice-laptop" = {
-      settings.exclude = [
-        "*.pyc"
-        "*.tmp"
-        "__pycache__"
-        ".cache"
-      ];
-    };
-    roles.server.machines."backup-server" = {};
-  };
-};
-```
 
 ## External Backup Destinations
 
 You don't have to back up to another Clan machine. You can add external destinations like a Hetzner Storage Box or any SSH-accessible BorgBackup server.
 
 ```nix
-inventory.instances = {
-  borgbackup = {
-    roles.client.machines."alice-laptop" = {
-      settings.destinations."storagebox" = {
-        repo = "user-sub1@user-sub1.your-storagebox.de:/./borgbackup";
-        rsh = "ssh -p 23 -oStrictHostKeyChecking=accept-new -i /run/secrets/vars/borgbackup/borgbackup.ssh";
-      };
+{
+  # Ensure this is unique among all clans you want to use.
+  meta.name = "MY-HETZNER-CLAN";
+  meta.domain = "myhetznerclan.lol";
+
+  inventory.machines = {
+    postgres-server = {
+        deploy.targetHost = "root@192.168.56.106";
+        tags = [ ];
     };
   };
-};
+
+  inventory.instances = {
+
+    borgbackup = {
+      roles.client.machines."postgres-server" = {
+        settings.destinations."storagebox" = {
+          repo = "u576452@u576452.your-storagebox.de:/./borgbackup";
+          rsh = "ssh -p 23 -oStrictHostKeyChecking=accept-new -i /run/secrets/vars/borgbackup/borgbackup.ssh";
+        };
+      };
+    };
+
+    sshd = {
+      roles.server.tags.all = { };
+      roles.server.settings.authorizedKeys = {
+        # Insert the public key that you want to use for SSH access.
+        # All keys will have ssh access to all machines ("tags.all" means 'all machines').
+        # Alternatively set 'users.users.root.openssh.authorizedKeys.keys' in each machine
+        "admin-machine-1" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop";
+      };
+    };
+
+    user-root = {
+      module = {
+        name = "users";
+      };
+      roles.default.tags.all = { };
+      roles.default.settings = {
+        user = "root";
+        prompt = true;
+      };
+    };
+
+  };
+
+  machines = {
+
+    postgres-server = { config, ... }: {
+      services.postgresql = {
+        enable = true;
+        ensureDatabases = [ "mydatabase" ];
+      };
+
+      clan.core.postgresql.enable = true;
+      clan.core.postgresql.databases.mydatabase = { };
+                  
+      clan.core.state."postgresql" = {
+        folders = [];
+        preBackupScript = ''
+          systemctl stop postgresql
+        '';
+        postBackupScript = ''
+          systemctl start postgresql
+        '';
+      };
+    };
+
+  };
+}
 ```
 
 After configuring, add your Clan-generated SSH public key to the external server:
 
+WORKFLOW:
+
+Create the storage box on hetzner (or use an existing one). If you're creating one, you can probably use your own id_ed25519.pub file for the key. (Make sure the following settings are checked when you create the box: Under **Additional Settings** check **Allow SSH** and **External Reachability**.
+)
+
+Create a new clan. Replace the entire clan.nix file with the clan file below, and type in the clan name and domain you previously chose. 
+
+Create one machines, postgres-server. Gather hardware requirements, and create a disk as usual.
+
+Click on the overview screen for the storage box, and copy the user and server (URL) into the clan.nix file below.
+
 ```bash
-# Get the public key Clan generated
+# For non-Hetzner: Get the public key Clan generated
 clan vars get alice-laptop borgbackup/borgbackup.ssh.pub
 
 # For Hetzner Storage Box, you can pipe it directly:
 clan vars get alice-laptop borgbackup/borgbackup.ssh.pub | ssh -p23 user-sub1@user-sub1.your-storagebox.de install-ssh-key
 ```
 
-You can combine internal (server role) and external destinations. The client will back up to all of them.
-
-## PostgreSQL Database Backups
-
-Clan has built-in support for PostgreSQL. Instead of manually writing pre/post scripts to dump and restore databases, you can use the PostgreSQL module:
+Regarding the rsh attribute, which looks like this:
 
 ```nix
-# machines/backup-server/configuration.nix
-{
-  clan.core.postgresql.enable = true;
-
-  clan.core.postgresql.databases.myapp = {
-    create = {
-      TEMPLATE = "template0";
-      ENCODING = "UTF8";
-      OWNER = "myapp";
-    };
-    restore.stopOnRestore = [
-      "myapp.service"
-    ];
-  };
-}
+rsh = "ssh -p 23 -oStrictHostKeyChecking=accept-new -i /run/secrets/vars/borgbackup/borgbackup.ssh";
 ```
 
-This automatically:
-- Dumps the database before each backup
-- Stores the dump in the backup repository
-- Stops the listed services during restore
-- Recreates the database with the correct settings on restore
+here's an explanation:
+
+- rsh — stands for "remote shell." It's the borgbackup setting that defines what command to use for connecting to the remote repository.
+- ssh — use the SSH command for the connection.
+
+- -p 23 — connect on port 23 (Hetzner's SSH port for storage boxes, instead of the default port 22).
+- -oStrictHostKeyChecking=accept-new — this controls host key verification:
+
+  - yes (default) would require the host key to already be in known_hosts, otherwise refuse
+  - no would blindly accept anything (insecure)
+  - accept-new is the sweet spot — accepts new hosts on first connection automatically (so the backup doesn't fail the first time), but still rejects if the key changes later (protecting against man-in-the-middle attacks)
+
+- -i /run/secrets/vars/borgbackup/borgbackup.ssh — use this specific private key file. This is the Clan-generated borgbackup private key, which gets deployed to postgres-server at that path under /run/secrets/ (a RAM-only directory, so the key never touches disk). That matches the public key you pushed to Hetzner with      
+install-ssh-key.
+
+So in plain English: "To reach the backup repo, run ssh on port 23, auto-trust new hosts but not changed ones, and authenticate with the borgbackup private key     
+stored in secrets."
+
+
+
+
+BigTime-Noise-123
+
+You can combine internal (server role) and external destinations. The client will back up to all of them.
+
 
 ## A Machine Can Be Both Client and Server
 
@@ -226,47 +661,7 @@ inventory.instances = {
 };
 ```
 
-## Complete Examples
-
-### Example 1: Simple Two-Machine Backup
-
-The most basic setup -- one laptop backed up to one server.
-
-```nix
-# clan.nix
-{
-  inventory.machines = {
-    laptop = { deploy.targetHost = "root@192.168.1.10"; };
-    server = { deploy.targetHost = "root@192.168.1.20"; };
-  };
-
-  inventory.instances = {
-    borgbackup = {
-      roles.client.machines."laptop" = {};
-      roles.server.machines."server" = {};
-    };
-  };
-}
-```
-
-```nix
-# machines/laptop/configuration.nix
-{ ... }:
-{
-  clan.core.state.home-data = {
-    folders = [ "/home/user/Documents" "/home/user/Projects" ];
-  };
-}
-```
-
-```bash
-clan vars generate laptop --no-sandbox
-clan vars generate server --no-sandbox
-clan machines update laptop
-clan machines update server
-```
-
-### Example 2: Multiple Machines with Custom Schedules
+## Example: Multiple Machines with Custom Schedules
 
 Three workstations backing up to a NAS, each on different schedules.
 
@@ -296,97 +691,4 @@ Three workstations backing up to a NAS, each on different schedules.
 }
 ```
 
-### Example 3: Offsite Backup to Hetzner Storage Box
 
-A machine backing up to both a local server and an offsite Hetzner Storage Box.
-
-```nix
-# clan.nix
-{
-  inventory.instances = {
-    borgbackup = {
-      roles.client.machines."backup-server" = {
-        settings.destinations."hetzner" = {
-          repo = "u123456-sub1@u123456-sub1.your-storagebox.de:/./borgbackup";
-          rsh = "ssh -p 23 -oStrictHostKeyChecking=accept-new -i /run/secrets/vars/borgbackup/borgbackup.ssh";
-        };
-      };
-      # Also back up to a local server
-      roles.server.machines."local-nas" = {};
-    };
-  };
-}
-```
-
-Setup steps:
-
-```bash
-# 1. Generate keys
-clan vars generate backup-server --no-sandbox
-
-# 2. Add the SSH key to the Hetzner Storage Box
-clan vars get backup-server borgbackup/borgbackup.ssh.pub | ssh -p23 u123456-sub1@u123456-sub1.your-storagebox.de install-ssh-key
-
-# 3. Deploy
-clan machines update backup-server
-```
-
-### Example 4: Application Server with Database Backups and Hooks
-
-A server running Nextcloud with both file and database backups.
-
-```nix
-# machines/app-server/configuration.nix
-{ config, lib, pkgs, ... }:
-{
-  # PostgreSQL database backup
-  clan.core.postgresql.enable = true;
-  clan.core.postgresql.databases.nextcloud = {
-    create = {
-      TEMPLATE = "template0";
-      LC_COLLATE = "C";
-      LC_CTYPE = "C";
-      ENCODING = "UTF8";
-      OWNER = "nextcloud";
-    };
-    restore.stopOnRestore = [
-      "phpfpm-nextcloud.service"
-      "nextcloud-cron.timer"
-    ];
-  };
-
-  # File state with hooks
-  clan.core.state.nextcloud-files = {
-    folders = [ "/var/lib/nextcloud/data" ];
-
-    preBackupScript = ''
-      export PATH=${lib.makeBinPath [ config.systemd.package ]}
-      systemctl stop phpfpm-nextcloud.service
-      systemctl stop nextcloud-cron.timer
-    '';
-
-    postBackupScript = ''
-      export PATH=${lib.makeBinPath [ config.systemd.package ]}
-      systemctl start phpfpm-nextcloud.service
-      systemctl start nextcloud-cron.timer
-    '';
-  };
-}
-```
-
-```nix
-# clan.nix -- the backup configuration
-{
-  inventory.instances = {
-    borgbackup = {
-      roles.client.machines."app-server" = {
-        settings.startAt = "*-*-* 02:00:00";
-        settings.exclude = [ "*.log" "*.tmp" ];
-      };
-      roles.server.machines."backup-server" = {
-        settings.directory = "/data/backups";
-      };
-    };
-  };
-}
-```
