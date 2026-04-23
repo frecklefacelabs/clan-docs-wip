@@ -1,0 +1,3 @@
+For clan-core repo:
+claude --resume 14b88a93-8515-4423-9e25-75e02750c7b7
+
