@@ -1,0 +1,124 @@
+# P2P SSH via Iroh
+
+:::admonition[Experimental]{type=danger}
+This service is experimental and will change in the future.
+:::
+
+:::admonition[Security Notice]{type=warning}
+Enabling this service exposes your machine's SSH service to anyone on the iroh network. The only protection against unauthorized access is SSH authentication itself. Before enabling this service, make sure SSH on all affected machines is configured securely: use private key authentication only and disable password login.
+:::
+
+---
+
+The `p2p-ssh-iroh` service enables SSH access to machines behind NAT or firewalls without port forwarding, without a VPN, and without any public IP address. It uses [Iroh](https://github.com/n0-computer/dumbpipe)'s peer-to-peer QUIC transport to punch through NAT and establish an encrypted SSH tunnel from anywhere.
+
+This service is not a VPN. It does not give machines private IP addresses or route general traffic between them. It is purely for SSH access: any machine with the `server` role can be reached via `clan ssh` or `clan machines update` from any machine that has an internet connection, regardless of NAT.
+
+`p2p-ssh-iroh` has the highest priority of all Clan networking services (3000), meaning Clan tries it before anything else when connecting to a machine.
+
+---
+
+## When to Use
+
+Use `p2p-ssh-iroh` when:
+
+- You want SSH access to machines behind NAT from anywhere, with no infrastructure to set up
+- You manage machines on networks where you have no control over firewall rules or port forwarding
+- You want the simplest possible answer to "how do I reach this machine from the internet"
+
+Do not use `p2p-ssh-iroh` as your only networking service if you also need machines to communicate with each other over a private network. For that, use ZeroTier, WireGuard, or Mycelium instead, and optionally add `p2p-ssh-iroh` on top for convenient SSH access.
+
+---
+
+## How It Works
+
+When you assign the `server` role to a machine, Clan generates a stable Iroh secret key and a dumbpipe connection ticket for it. A systemd service runs continuously, forwarding incoming Iroh connections to the local SSH daemon. The ticket is stored as a var and distributed automatically so Clan knows how to reach the machine.
+
+When you run `clan ssh my-machine` or `clan machines update my-machine`, Clan reads the ticket and establishes a P2P connection via Iroh's network. If a direct connection is possible, it connects directly. If both machines are behind NAT, Iroh falls back to relay servers to establish the connection.
+
+---
+
+## Roles
+
+`p2p-ssh-iroh` has a single role: `server`. Assign it to any machine you want to be reachable via this service. There is no `client` role; any machine running Clan can connect to a server without any additional configuration.
+
+---
+
+## Basic Example
+
+```nix
+# clan.nix
+inventory.machines = {
+  sally-laptop = { tags = [ "laptop" ]; };
+  fred-laptop  = { tags = [ "laptop" ]; };
+};
+
+inventory.instances = {
+  p2p-ssh-iroh = {
+    roles.server.tags = [ "laptop" ];
+  };
+};
+```
+
+After running `clan vars generate` and deploying, both laptops are reachable via `clan ssh sally-laptop` from any internet-connected machine, even through NAT.
+
+---
+
+## Complete Example
+
+Here `p2p-ssh-iroh` provides SSH access to all machines. The `internet` service also covers servers that have public addresses, and ZeroTier provides a private mesh network for inter-machine communication.
+
+```nix
+# clan.nix
+inventory.machines = {
+  web-server   = { tags = [ "server" ]; };
+  db-server    = { tags = [ "server" ]; };
+  sally-laptop = { tags = [ "laptop" ]; };
+  fred-laptop  = { tags = [ "laptop" ]; };
+};
+
+inventory.instances = {
+  # p2p-ssh-iroh on all machines for SSH access from anywhere
+  p2p-ssh-iroh = {
+    roles.server.tags = [ "all" ];
+  };
+
+  # Direct SSH for servers with public addresses (fast path)
+  internet = {
+    roles.default.machines."web-server".settings.host = "web.example.com";
+    roles.default.machines."db-server".settings.host  = "db.example.com";
+  };
+
+  # ZeroTier for private inter-machine networking
+  zerotier = {
+    roles.controller.machines."web-server" = {};
+    roles.peer.tags = [ "all" ];
+  };
+};
+```
+
+Clan tries `p2p-ssh-iroh` first (priority 3000) when connecting to any machine. For the servers, it will also try direct SSH (priority 2000) and ZeroTier (priority 900) as alternatives.
+
+---
+
+## SSH Security
+
+Because this service exposes SSH to the global Iroh network, SSH authentication is the only barrier to access. Verify your SSH configuration before deploying:
+
+```bash
+# On each machine, confirm password authentication is disabled
+grep PasswordAuthentication /etc/ssh/sshd_config
+# Should show: PasswordAuthentication no
+
+# Confirm at least one authorized key is present for root
+cat /root/.ssh/authorized_keys
+```
+
+In NixOS, you can enforce this in your configuration:
+
+```nix
+services.openssh = {
+  settings.PasswordAuthentication = false;
+  settings.PermitRootLogin = "prohibit-password";
+};
+```
