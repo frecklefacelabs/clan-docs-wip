@@ -1,0 +1,50 @@
+Good picture now. Here's what I found:
+
+---
+The Installer Service
+
+Where it lives: clanServices/installer/
+
+What it does: Turns a machine in your clan inventory into a custom NixOS installer ISO. It imports nixpkgs' installation-device.nix profile, pins the latest ZFS-compatible kernel, configures root autologin, and bundles the tools nixos-anywhere needs (disko, nixos-facter, rsync). The result is an ISO you build yourself from your own flake, rather than downloading a generic one from nixos.org.
+
+The CLI command:
+clan machines build installer-machine --format iso
+
+How you configure it -- add one machine and one instance to clan.nix:
+inventory.machines = {
+  installer-machine = {
+    tags = [ "installer-tag" ];
+  };
+};
+
+inventory.instances = {
+  installer-module = {
+    module.name = "installer";
+    roles.iso.tags = [ "installer-tag" ];
+  };
+};
+
+The default template already includes it: templates/clan/default/clan.nix ships with installer-machine, installer-tag, and the instance pre-configured. So if someone starts from clan templates apply clan default, they've got it for free -- they just need to run the build.
+
+---
+Your coworker's point
+
+He's right that this is the new intended flow. The default template is clearly designed around it.
+
+The tradeoff is real though:
+
+- Old way (download ISO): Go to URL, download ~1GB, flash to USB, boot. No prior Nix setup needed -- you can do this before you even have a working flake.
+- New way (build your own): You need a working clan.nix first, then clan machines build installer-machine --format iso (which takes 10-20 minutes the first time), then flash and boot.
+
+Where the new way wins: The ISO comes from your flake's exact nixpkgs revision, includes the same tools, and the Tor integration even shows onion addresses in the login banner. No version mismatch between ISO and your config.
+
+Where the old way wins: It's faster to get started and you don't need Nix on your machine yet when you're doing the very first install.
+
+---
+My read on the docs question
+
+The VirtualBox guide is probably the one where this matters most -- VirtualBox already needs you to have the flake working before you start, so adding "build the ISO from your flake" doesn't add much friction. For the physical machine guide, it's a bigger ask because you're dealing with real hardware and users might not have Nix set up yet.
+
+A reasonable middle path: keep "download the ISO" as the primary getting-started path for now, and add a note after the install step saying "if you started from the default clan template, you can also build your own installer ISO with clan machines build installer-machine --format iso -- this gives you a customized image that matches your flake."
+
+That way beginners aren't blocked, but users who want the "proper" flow can find it. What does your coworker think about that framing?
