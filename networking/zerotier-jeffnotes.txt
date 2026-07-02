@@ -1,0 +1,125 @@
+
+---
+
+FOR ME ONLY
+my-controller: fd0d:bb:f7d9:b176:5899:930d:bb:f7d9
+peer1: fd0d:bb:f7d9:b176:5899:93bf:df38:8f4d
+peer2: fd0d:bb:f7d9:b176:5899:934e:2532:b5b4
+
+
+---
+
+NOTES ON BETTER MOON DEMO
+
+? Can you show me an updated clan.nix file with that configuration?
+
+{
+  meta.name = "MY-ZEROTIER-CLAN";
+  meta.domain = "myzerotier.example";
+
+  inventory.machines = {
+    controller = {
+      deploy.targetHost = "root@<CONTROLLER-ELASTIC-IP>";
+      tags = [ ];
+    };
+    moon = {
+      deploy.targetHost = "root@<MOON-ELASTIC-IP>";
+      tags = [ ];
+    };
+    laptop = {
+      deploy.targetHost = "root@<LAPTOP-IP>";
+      tags = [ ];
+    };
+  };
+
+  inventory.instances = {
+    internet = {
+      roles.default.machines."controller".settings.host = "<CONTROLLER-ELASTIC-IP>";
+      roles.default.machines."moon".settings.host       = "<MOON-ELASTIC-IP>";
+    };
+
+    zerotier = {
+      roles.controller.machines."controller" = {};
+      roles.moon.machines."moon" = {
+        settings.stableEndpoints = [ "<MOON-ELASTIC-IP>" ];
+      };
+      roles.peer.tags = [ "all" ];
+    };
+
+    sshd = {
+      roles.server.tags.all = {};
+      roles.server.settings.authorizedKeys = {
+        "admin" = "PASTE_YOUR_SSH_PUBLIC_KEY_HERE";
+      };
+    };
+
+    user-root = {
+      module.name = "users";
+      roles.default.tags.all = {};
+      roles.default.settings = {
+        user = "root";
+        prompt = true;
+      };
+    };
+  };
+}
+
+
+Note that laptop has no internet entry -- in a real deployment it wouldn't have a known address. You still need deploy.targetHost so you can install it from your admin machine, but once ZeroTier is up, the laptop reaches everything through the mesh. The moon's stableEndpoints is the key piece: it tells every peer "you can always find the relay at this IP."
+
+
+A few notes:
+
+- laptop has no internet entry -- in a real deployment, the laptop wouldn't have a known address. It finds the network by reaching the controller (whose address it gets from internet), and the moon helps if NAT gets in the way. For your EC2 test you still need deploy.targetHost so clan machines install can reach it, but that's a setup-time concern, not a ZeroTier one.
+- No machines block needed -- there's no per-machine NixOS config (no tmpfiles, state, databases) for this example. Just the inventory.
+- roles.peer.tags = [ "all" ] covers all three machines -- and as I mentioned earlier, the controller and moon automatically get the peer role in addition to their special roles.
+
+
+Clan gives you two ways to bring a machine into your ZeroTier network. Inventory machines -- defined in inventory.machines and assigned the peer role -- are fully managed by Clan: their identities, keys, and network membership are all generated and configured automatically. This is the approach for any machine you provision with clan machines install. External machines -- ones you don't manage with Clan, like a personal phone or a colleague's workstation -- can join the same network by adding their ZeroTier IPv6 address to the controller's allowedIps setting. These machines must have ZeroTier installed independently and join the network manually (using the network ID from clan vars get controller zerotier-controller/zerotier-network-id), but once the controller admits them, they participate in the mesh like any other peer.
+?
+? It's worth noting that allowedIps and the moon role solve different problems. allowedIps is about membership -- it tells the controller "this machine is allowed to join the network." A moon is about connectivity -- it provides a publicly reachable relay so that machines behind NAT or restrictive firewalls can find each other. An external machine admitted via allowedIps might still need the moon to connect if it's behind a strict NAT, and a moon does nothing about membership -- it just helps traffic flow. The two features are complementary: allowedIps opens the door, and the moon shows you how to walk through it.
+
+
+ From a networking perspective, is it possible for me to simulate the laptop's likely scenario (such as sitting at a coffee shop) on EC2?
+
+Yes! Put the laptop instance in a private subnet with a NAT gateway. That's almost exactly what a coffee shop looks like from a networking perspective:
+
+- No public IP -- nothing can reach it directly
+- Can make outbound connections (through the NAT gateway, just like a coffee shop router)
+- ZeroTier's direct peer-to-peer hole-punching won't work -- the moon has to relay
+
+The AWS setup would be:
+
++------------+---------+---------------------------------+--------------------------------------+
+|  Machine   | Subnet  |            Public IP            |                 Why                  |
++------------+---------+---------------------------------+--------------------------------------+
+| controller | public  | Elastic IP                      | Needs to be reachable to admit peers |
++------------+---------+---------------------------------+--------------------------------------+
+| moon       | public  | Elastic IP                      | Needs to be reachable as a relay     |
++------------+---------+---------------------------------+--------------------------------------+
+| laptop     | private | none (NAT gateway for outbound) | Simulates being behind NAT           |
++------------+---------+---------------------------------+--------------------------------------+
+
+The catch: since the laptop has no public IP, you can't SSH into it directly from your admin machine to run clan machines install. You'd need to either:
+
+1. Install it while it's in the public subnet first, then move it to private (easiest -- and honestly realistic, since you'd configure a real laptop at home before taking it to a coffee shop)
+2. Use a bastion/jump host in the public subnet
+
+Option 1 is simpler and makes a better docs narrative: "set up the laptop at the office, then take it to the coffee shop and it stays connected through the moon."
+
+That said -- this adds real AWS complexity (VPC subnets, NAT gateway, moving instances) to what's supposed to be a ZeroTier guide. Worth it for the realism, or overkill for the docs?
+
+Ah! That's what I was trying to get to when I asked earlier if I should create two networks. I'm not a network guy, so I'm not all that familiar with the terminology. So the correct answer is yes, but subnets not networks.
+
+Exactly! One VPC, two subnets -- public and private. Same network, different visibility. That's the right mental model.
+
+And honestly, that maps perfectly to reality: your servers live in a datacenter with public IPs (public subnet), and your employees' laptops are behind coffee shop / home routers (private subnet behind NAT). The moon bridges the gap.
+
+Want me to update the clan.nix with any changes, or are you good to start spinning up the AWS infrastructure?
+
+ I can do the AWS part. I'll just open public IP to the subnet the laptop is on, which "fakes" it a bit, but then lets Clan connect to it, etc.
+
+That's a perfectly pragmatic approach -- the laptop still has no Elastic IP and sits behind NAT, so ZeroTier still has to go through the moon. The temporary public IP just lets you run clan machines install without needing a bastion host. You can note in the docs that this is a simulation shortcut.
+
+Have fun setting it up! Let me know when you're ready to test or when you need help with the docs write-up.
+

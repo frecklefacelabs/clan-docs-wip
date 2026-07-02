@@ -1,8 +1,6 @@
 # More on Backups
-# Early Draft -- Under Active Development
-# >>> NOT READY FOR EDITS <<<
 
-# MAIN TEXT
+# MOVED TO MAIN REPO, DO NOT USE
 
 ## Backup Hooks: Pre/Post Scripts
 
@@ -165,12 +163,18 @@ Note also that alice-machine has a tag called "employees" and then provides an a
 When setting up borgbackup (or any service with cross-machine dependencies), the order in which you install your machines matters.
 
 The borgbackup client needs the server's SSH host key to establish connection to the borgbackup server. This key is generated during the borgbackup server's installation. If you install a client machine before the server, the client won't be able to find the server's key, and you'll need to re-generate its vars afterward. To avoid this, install the backup server before any client machines:
-  
+
+```bash
 clan machines install backup-server --target-host root@<BACKUP-IP>
+```
 
+```bash
 clan machines install db-server --target-host root@<DB-IP>
+```
 
+```bash
 clan machines install alice-laptop --target-host root@<ALICE-IP>
+```
 
 This applies to any service where one machine depends on another machine's generated secrets — always install or generate vars for the machine that provides the secret before the machines that consume it.
 
@@ -209,7 +213,6 @@ This applies to any service where one machine depends on another machine's gener
     user-alice = {
       module.name = "users";
       roles.default.machines."alice-laptop" = {};
-      roles.default.tags = [ "all" ];
       roles.default.settings = {
         user = "alice";
         openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAZGMNlooljzJfmzQKaVcmj4tRYW+gqBIfdWbG0NU3XL freckleface@freckleface--Laptop" ];
@@ -288,7 +291,7 @@ roles.client.tags.employees.settings = {
 
 This would exclude all files ending with .bak on every machine tagged with employee.
 
-Here's an example that excluded multiple files and patterns on only the machine called alice-laptop.
+Here's an example that excludes multiple files and patterns on only the machine called `alice-laptop`.
 
 ```nix
 inventory.instances = {
@@ -407,7 +410,6 @@ You don't have to back up to another Clan machine. You can add external destinat
       module = {
         name = "users";
       };
-      roles.default.tags.all = { };
       roles.default.settings = {
         user = "root";
         prompt = true;
@@ -520,5 +522,99 @@ inventory.instances = {
 };
 ```
 
+## Configuring multiple backups for a single client
 
+Clan allows you to set up more than one backup server and back a single client to both. The following clan.nix file shows how to do this:
 
+```nix
+{
+  # Ensure this is unique among all clans you want to use.
+  meta.name = "MY-BACKUP-CLAN";
+  meta.domain = "mybackupclan.lol";
+
+  inventory.machines = {
+    postgres-server = {
+        deploy.targetHost = "root@<IP-ADDRESS>"; # REPLACE WITH POSTGRES-SERVER'S IP ADDRESS; keep "root@"
+        tags = [ ];
+    };
+    backup-server = {
+        deploy.targetHost = "root@<IP-ADDRESS>"; # REPLACE WITH BACKUP-SERVER'S IP ADDRESS; keep "root@"
+        tags = [ ];
+    };
+  };
+
+  # Docs: See https://docs.clan.lol/latest/services/definition/
+  inventory.instances = {
+
+    borgbackup = {
+      roles.client.machines."postgres-server" = { # declares postgres-server a client (ONE time) 
+        settings.destinations."storagebox" = { # Destination #1
+          repo = "<HETZNER-USER>@<HETZNER-USER>.your-storagebox.de:/./borgbackup"; # REPLACE <HETZNER-USER> with your Hetzner storage box username
+          rsh = "ssh -p 23 -oStrictHostKeyChecking=accept-new -i /run/secrets/vars/borgbackup/borgbackup.ssh";
+        };
+      };
+      roles.server.machines."backup-server" = { # default server
+        settings.address = "<IP-ADDRESS>"; # REPLACE WITH BACKUP-SERVER'S IP ADDRESS
+        settings.directory = "/var/lib/borgbackup";
+      };
+    };
+
+    # Docs: https://docs.clan.lol/latest/services/official/sshd/
+    # SSH service for secure remote access to machines.
+    sshd = {
+      roles.server.tags.all = { };
+      roles.server.settings.authorizedKeys = {
+        "admin-machine-1" = "PASTE_YOUR_KEY_HERE";
+      };
+    };
+
+    # Docs: https://docs.clan.lol/latest/services/official/users/
+    # Root password management for all machines.
+    user-root = {
+      module = {
+        name = "users";
+      };
+      roles.default.tags.all = { };
+      roles.default.settings = {
+        user = "root";
+        prompt = true;
+      };
+    };
+  };
+
+  # Additional NixOS configuration can be added here.
+  machines = {
+
+    postgres-server = { config, ... }: {
+      services.postgresql = {
+        enable = true;
+        ensureDatabases = [ "mydatabase" ];
+      };
+
+      clan.core.postgresql.enable = true;
+      clan.core.postgresql.databases.mydatabase = { };
+
+      clan.core.state."postgresql" = {
+        folders = [];
+        preBackupScript = ''
+          systemctl stop postgresql
+        '';
+        postBackupScript = ''
+          systemctl start postgresql
+        '';
+      };
+    };
+
+  };
+}
+```
+
+A client machine backs up to every server in the borgbackup instance for which it's a client, plus any explicit destinations listed under its own settings.destinations.
+
+To make all this work, clan generates one `systemd` `borgbackup-job-*` unit per destination. So on `postgres-server` you'll get two scheduled jobs:
+
+- borgbackup-job-backup-server (to the local VM)
+
+- borgbackup-job-storagebox (to Hetzner)
+
+Both run on the same schedule and both honor the pre/post backup hooks, meaning postgres gets cleanly stopped/started around each backup independently.

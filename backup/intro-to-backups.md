@@ -1,6 +1,6 @@
 # Introduction to Backups
-# Early Draft -- Under Active Development
-# >>> NOT READY FOR EDITS <<<
+
+# MOVED TO MAIN REPO -- DO NOT USE
 
 Clan makes it easy to back your machines up from one to another. You define what to back up and where to send it, and Clan handles the rest: encryption, scheduling, and restoration.
 

@@ -4,9 +4,7 @@
 
 Mycelium has a priority of 800, placing it below WireGuard (1000) and above Tor (10).
 
----
-
-## When to Use
+# When to Use
 
 Mycelium is a good choice when:
 
@@ -17,9 +15,7 @@ Mycelium is a good choice when:
 
 Unlike WireGuard, Mycelium has no controller requirement: machines join the global Mycelium network through public nodes maintained by the Mycelium project and discover each other from there. You don't need to manage any infrastructure.
 
----
-
-## Roles
+# Roles
 
 Mycelium has a single role: `peer`. Every machine in your inventory that you want on the Mycelium network gets this role.
 
@@ -32,9 +28,7 @@ Peer settings:
 
 In almost all cases, the defaults are correct. You would only disable `addHostedPublicNodes` if you are running a fully private Mycelium network with your own bootstrap infrastructure.
 
----
-
-## Basic Example
+# Basic Example
 
 ```nix
 # clan.nix
@@ -47,9 +41,7 @@ inventory.instances = {
 
 That's the entire configuration. After running `clan vars generate` and deploying, every machine has a stable IPv6 address derived from its private key and can reach every other machine on the network.
 
----
-
-## Complete Example
+# Complete Example
 
 Here Mycelium provides a mesh between all machines, with the `internet` service for direct SSH access to servers that have public addresses and Tor as a final fallback:
 
